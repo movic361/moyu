@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>摸鱼极限躲避</title>
+<style>
+  body, html {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #f7f7f5;
+    overflow: hidden; /* 防止手机端滑动屏幕 */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    touch-action: none; /* 禁用默认触摸动作，提升操控流畅度 */
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  #ui-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none; /* 让点击事件穿透到 canvas */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+
+  #score-display {
+    position: absolute;
+    top: 10%;
+    font-size: 48px;
+    font-weight: 600;
+    color: #1d1d1f;
+    opacity: 0.2;
+    letter-spacing: 2px;
+  }
+
+  #game-over {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 40px;
+    border-radius: 12px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    pointer-events: auto;
+  }
+
+  #game-over h2 {
+    margin: 0 0 16px 0;
+    color: #d9381e;
+  }
+
+  button {
+    background-color: #1d1d1f;
+    color: #fff;
+    border: none;
+    padding: 12px 32px;
+    font-size: 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 20px;
+    transition: background 0.2s;
+  }
+
+  button:active {
+    background-color: #d9381e;
+  }
+
+  .hint {
+    position: absolute;
+    bottom: 5%;
+    font-size: 12px;
+    color: #86868b;
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<div id="ui-layer">
+  <div id="score-display">0</div>
+  
+  <div id="game-over">
+    <h2>摸鱼被抓！</h2>
+    <p>坚持了: <span id="final-score">0</span> 秒</p>
+    <button onclick="resetGame()">重新开始 (点击屏幕边缘)</button>
+  </div>
+
+  <div class="hint" id="hint-text">点击屏幕左侧向左，右侧向右 (或使用 A / D 键)</div>
+</div>
+
+<script>
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const scoreDisplay = document.getElementById('score-display');
+  const gameOverScreen = document.getElementById('game-over');
+  const finalScoreSpan = document.getElementById('final-score');
+  const hintText = document.getElementById('hint-text');
+
+  // 自适应屏幕
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // 游戏核心变量
+  let isGameOver = false;
+  let score = 0;
+  let frameCount = 0;
+  let obstacles = [];
+  let particles = [];
+
+  // 主角属性（调整了较慢的移动速度，增强操控感）
+  const player = {
+    w: 24,
+    h: 24,
+    x: canvas.width / 2 - 12,
+    y: canvas.height - 100,
+    speed: 4.5, // 速度慢一点，主打平滑预判
+    dx: 0,
+    color: '#1d1d1f'
+  };
+
+  // 控制逻辑
+  function handleInputStart(xPos) {
+    if (isGameOver) return;
+    hintText.style.display = 'none';
+    if (xPos < canvas.width / 2) {
+      player.dx = -player.speed; // 左
+    } else {
+      player.dx = player.speed;  // 右
+    }
+  }
+
+  function handleInputEnd() {
+    player.dx = 0;
+  }
+
+  // 手机端触摸
+  window.addEventListener('touchstart', (e) => {
+    handleInputStart(e.touches[0].clientX);
+  });
+  window.addEventListener('touchend', handleInputEnd);
+
+  // 电脑端键盘（确保 A左 D右，绝不反转）
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'a' || e.key === 'A') handleInputStart(0);
+    if (e.key === 'd' || e.key === 'D') handleInputStart(canvas.width);
+  });
+  window.addEventListener('keyup', (e) => {
+    if (['a', 'A', 'd', 'D'].includes(e.key)) handleInputEnd();
+  });
+
+  // 生成障碍物
+  function spawnObstacle() {
+    const size = Math.random() * 30 + 20;
+    obstacles.push({
+      x: Math.random() * (canvas.width - size),
+      y: -size,
+      w: size,
+      h: size,
+      speed: Math.random() * 3 + 3 + (score * 0.1), // 随时间微幅加速
+      color: '#d9381e' // 朱红色障碍物
+    });
+  }
+
+  // 生成爆炸粒子（碰撞特效）
+  function createParticles(x, y, color) {
+    for (let i = 0; i < 15; i++) {
+      particles.push({
+        x: x,
+        y: y,
+        vx: (Math.random() - 0.5) * 10,
+        vy: (Math.random() - 0.5) * 10,
+        life: 1,
+        color: color
+      });
+    }
+  }
+
+  // 游戏主循环
+  function update() {
+    if (isGameOver) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 更新主角位置
+    player.x += player.dx;
+    // 边界限制
+    if (player.x < 0) player.x = 0;
+    if (player.x + player.w > canvas.width) player.x = canvas.width - player.w;
+
+    // 绘制主角
+    ctx.fillStyle = player.color;
+    ctx.shadowColor = 'rgba(0,0,0,0.2)';
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.roundRect(player.x, player.y, player.w, player.h, 4);
+    ctx.fill();
+    ctx.shadowBlur = 0; // 重置阴影
+
+    // 障碍物逻辑
+    if (frameCount % Math.max(20, 60 - score * 2) === 0) {
+      spawnObstacle();
+    }
+
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      let obs = obstacles[i];
+      obs.y += obs.speed;
+
+      // 绘制障碍物
+      ctx.fillStyle = obs.color;
+      ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+
+      // 严格的 AABB 碰撞检测（拒绝穿模）
+      if (
+        player.x < obs.x + obs.w &&
+        player.x + player.w > obs.x &&
+        player.y < obs.y + obs.h &&
+        player.y + player.h > obs.y
+      ) {
+        // 发生真实碰撞！
+        createParticles(player.x + player.w/2, player.y + player.h/2, player.color);
+        createParticles(obs.x + obs.w/2, obs.y + obs.h/2, obs.color);
+        gameOver();
+      }
+
+      // 移除屏幕外的障碍物
+      if (obs.y > canvas.height) {
+        obstacles.splice(i, 1);
+      }
+    }
+
+    // 更新并绘制粒子（碎裂特效）
+    for (let i = particles.length - 1; i >= 0; i--) {
+      let p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= 0.05;
+      
+      if (p.life <= 0) {
+        particles.splice(i, 1);
+      } else {
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.life;
+        ctx.fillRect(p.x, p.y, 4, 4);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // 计分
+    if (frameCount % 60 === 0) {
+      score++;
+      scoreDisplay.innerText = score;
+    }
+
+    frameCount++;
+    requestAnimationFrame(update);
+  }
+
+  function gameOver() {
+    isGameOver = true;
+    scoreDisplay.style.display = 'none';
+    gameOverScreen.style.display = 'flex';
+    finalScoreSpan.innerText = score;
+  }
+
+  function resetGame() {
+    isGameOver = false;
+    score = 0;
+    frameCount = 0;
+    obstacles = [];
+    particles = [];
+    player.x = canvas.width / 2 - player.w / 2;
+    scoreDisplay.innerText = '0';
+    scoreDisplay.style.display = 'block';
+    gameOverScreen.style.display = 'none';
+    update();
+  }
+
+  // 启动游戏
+  update();
+</script>
+</body>
+</html>
